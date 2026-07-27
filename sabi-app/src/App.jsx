@@ -17,10 +17,12 @@ function App() {
   const [balance, setBalance] = useState(0);
   const [markets, setMarkets] = useState([]);
   const [trendingIds, setTrendingIds] = useState([]);
-  const [activeTab, setActiveTab] = useState("Trending"); // Trending | Sport | Politics | National | Global
+  const [activeTab, setActiveTab] = useState("Trending");
   const [activeSub, setActiveSub] = useState("All");
-  const [betSheet, setBetSheet] = useState(null);
+  const [betSheet, setBetSheet] = useState(null); // { optionId, marketId, label }
   const [stakeInput, setStakeInput] = useState("");
+  const [view, setView] = useState("markets"); // "markets" | "profile"
+  const [profile, setProfile] = useState(null);
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -54,7 +56,6 @@ function App() {
         .from("markets").select("*, options(*)").eq("status", "open");
       setMarkets(marketData || []);
 
-      // Trending: sum bet amounts per market in the last 24h, take top 3
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: recentBets } = await supabase
         .from("bets").select("market_id, amount").gte("placed_at", since);
@@ -72,6 +73,11 @@ function App() {
     setup();
   }, []);
 
+  async function loadProfile() {
+    const { data } = await supabase.from("users").select("*").eq("id", userId).single();
+    setProfile(data);
+  }
+
   async function confirmBet() {
     const amount = Number(stakeInput);
     if (!amount || amount <= 0) return;
@@ -87,7 +93,28 @@ function App() {
     window.location.reload();
   }
 
-  // Filter markets based on active tab/sub-filter
+  function estimatePayout() {
+    if (!betSheet || !stakeInput) return 0;
+    const market = markets.find((m) => m.id === betSheet.marketId);
+    if (!market) return 0;
+
+    const amount = Number(stakeInput);
+    if (!amount || amount <= 0) return 0;
+
+    const otherOptionsTotal = market.options
+      .filter((o) => o.id !== betSheet.optionId)
+      .reduce((s, o) => s + Number(o.total_staked), 0);
+    const chosenOptionTotal = Number(
+      market.options.find((o) => o.id === betSheet.optionId)?.total_staked || 0
+    );
+
+    const newWinningTotal = chosenOptionTotal + amount;
+    const newTotalPool = chosenOptionTotal + otherOptionsTotal + amount;
+    const payoutPool = newTotalPool * (1 - market.rake_percent / 100);
+
+    return (amount / newWinningTotal) * payoutPool;
+  }
+
   let visibleMarkets = markets;
   if (activeTab === "Trending") {
     visibleMarkets = markets
@@ -104,7 +131,7 @@ function App() {
   const subChips = CATEGORY_GROUPS[activeTab];
 
   return (
-    <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif" }}>
+    <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif", paddingBottom: "4rem" }}>
       <div style={{ padding: "1.5rem 1.25rem 0.5rem" }}>
         <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: 0 }}>
           Hello, {name}
@@ -114,95 +141,132 @@ function App() {
         </p>
       </div>
 
-      {/* Top-level tabs */}
-      <div style={{ display: "flex", gap: "0.5rem", padding: "0.75rem 1.25rem 0", overflowX: "auto" }}>
-        {["Trending", ...Object.keys(CATEGORY_GROUPS)].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => { setActiveTab(tab); setActiveSub("All"); }}
-            style={{
-              padding: "0.45rem 0.9rem", borderRadius: "20px", whiteSpace: "nowrap",
-              border: `1px solid ${activeTab === tab ? GREEN : "#3A3F47"}`,
-              background: activeTab === tab ? GREEN : "transparent",
-              color: activeTab === tab ? DARK : "#D6D9DE",
-              fontWeight: 600, fontSize: "0.85rem",
-            }}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-
-      {/* Sub-filter chips, only when a group with multiple sub-categories is active */}
-      {subChips && subChips.length > 1 && (
-        <div style={{ display: "flex", gap: "0.4rem", padding: "0.6rem 1.25rem 0", overflowX: "auto" }}>
-          {["All", ...subChips].map((sub) => {
-            const label = sub === "All" ? "All" : sub[0].toUpperCase() + sub.slice(1);
-            return (
+      {view === "markets" && (
+        <>
+          <div style={{ display: "flex", gap: "0.5rem", padding: "0.75rem 1.25rem 0", overflowX: "auto" }}>
+            {["Trending", ...Object.keys(CATEGORY_GROUPS)].map((tab) => (
               <button
-                key={sub}
-                onClick={() => setActiveSub(label)}
+                key={tab}
+                onClick={() => { setActiveTab(tab); setActiveSub("All"); }}
                 style={{
-                  padding: "0.3rem 0.7rem", borderRadius: "16px", whiteSpace: "nowrap",
-                  border: "1px solid #2A2F37",
-                  background: activeSub === label ? "#232830" : "transparent",
-                  color: activeSub === label ? GREEN : "#8A9099",
-                  fontSize: "0.78rem", fontWeight: 500,
+                  padding: "0.45rem 0.9rem", borderRadius: "20px", whiteSpace: "nowrap",
+                  border: `1px solid ${activeTab === tab ? GREEN : "#3A3F47"}`,
+                  background: activeTab === tab ? GREEN : "transparent",
+                  color: activeTab === tab ? DARK : "#D6D9DE",
+                  fontWeight: 600, fontSize: "0.85rem",
                 }}
               >
-                {label}
+                {tab}
               </button>
-            );
-          })}
+            ))}
+          </div>
+
+          {subChips && subChips.length > 1 && (
+            <div style={{ display: "flex", gap: "0.4rem", padding: "0.6rem 1.25rem 0", overflowX: "auto" }}>
+              {["All", ...subChips].map((sub) => {
+                const label = sub === "All" ? "All" : sub[0].toUpperCase() + sub.slice(1);
+                return (
+                  <button
+                    key={sub}
+                    onClick={() => setActiveSub(label)}
+                    style={{
+                      padding: "0.3rem 0.7rem", borderRadius: "16px", whiteSpace: "nowrap",
+                      border: "1px solid #2A2F37",
+                      background: activeSub === label ? "#232830" : "transparent",
+                      color: activeSub === label ? GREEN : "#8A9099",
+                      fontSize: "0.78rem", fontWeight: 500,
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ padding: "1rem 1.25rem" }}>
+            {visibleMarkets.length === 0 && (
+              <p style={{ color: "#6C7280", fontSize: "0.9rem" }}>Nothing here yet.</p>
+            )}
+
+            {visibleMarkets.map((m) => {
+              const total = m.options.reduce((s, o) => s + Number(o.total_staked), 0) || 1;
+              return (
+                <div key={m.id} style={{
+                  background: "#171B21", borderRadius: "16px", padding: "1rem",
+                  marginBottom: "0.85rem", border: "1px solid #232830",
+                }}>
+                  <p style={{ fontWeight: 600, fontSize: "0.98rem", margin: "0 0 0.2rem", lineHeight: 1.35 }}>
+                    {m.title}
+                  </p>
+                  <p style={{ color: "#6C7280", fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                    {m.category}
+                  </p>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    {m.options.map((o) => {
+                      const pct = Math.round((Number(o.total_staked) / total) * 100);
+                      return (
+                        <button
+                          key={o.id}
+                          onClick={() => setBetSheet({ optionId: o.id, marketId: m.id, label: o.label })}
+                          style={{
+                            flex: 1, padding: "0.7rem 0.5rem", borderRadius: "10px",
+                            border: `1px solid ${o.label === "Yes" ? GREEN : "#3A3F47"}`,
+                            background: o.label === "Yes" ? "rgba(0,230,118,0.08)" : "transparent",
+                            color: o.label === "Yes" ? GREEN : "#D6D9DE",
+                            fontWeight: 600, fontSize: "0.9rem",
+                          }}
+                        >
+                          {o.label} · {pct}%
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {view === "profile" && profile && (
+        <div style={{ padding: "1.5rem 1.25rem 5rem" }}>
+          <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: "0 0 1.5rem" }}>
+            {profile.first_name}'s Profile
+          </h1>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+            {[
+              { label: "Win Rate", value: `${profile.win_rate || 0}%` },
+              { label: "Total Profit", value: `₦${Number(profile.total_profit).toLocaleString()}` },
+              { label: "Current Streak", value: profile.current_streak },
+              { label: "Best Streak", value: profile.best_streak },
+            ].map((stat) => (
+              <div key={stat.label} style={{
+                background: "#171B21", border: "1px solid #232830", borderRadius: "14px", padding: "1rem",
+              }}>
+                <p style={{ color: "#6C7280", fontSize: "0.75rem", margin: "0 0 0.3rem", textTransform: "uppercase" }}>
+                  {stat.label}
+                </p>
+                <p style={{ color: GREEN, fontWeight: 700, fontSize: "1.3rem", margin: 0 }}>
+                  {stat.value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: "1.5rem", background: "#171B21", border: "1px solid #232830", borderRadius: "14px", padding: "1rem" }}>
+            <p style={{ color: "#6C7280", fontSize: "0.8rem", margin: "0 0 0.3rem" }}>Wallet Balance</p>
+            <p style={{ color: "#fff", fontWeight: 700, fontSize: "1.2rem", margin: 0 }}>
+              ₦{Number(profile.wallet_balance).toLocaleString()}
+            </p>
+          </div>
         </div>
       )}
 
-      <div style={{ padding: "1rem 1.25rem" }}>
-        {visibleMarkets.length === 0 && (
-          <p style={{ color: "#6C7280", fontSize: "0.9rem" }}>Nothing here yet.</p>
-        )}
-
-        {visibleMarkets.map((m) => {
-          const total = m.options.reduce((s, o) => s + Number(o.total_staked), 0) || 1;
-          return (
-            <div key={m.id} style={{
-              background: "#171B21", borderRadius: "16px", padding: "1rem",
-              marginBottom: "0.85rem", border: "1px solid #232830",
-            }}>
-              <p style={{ fontWeight: 600, fontSize: "0.98rem", margin: "0 0 0.2rem", lineHeight: 1.35 }}>
-                {m.title}
-              </p>
-              <p style={{ color: "#6C7280", fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                {m.category}
-              </p>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                {m.options.map((o) => {
-                  const pct = Math.round((Number(o.total_staked) / total) * 100);
-                  return (
-                    <button
-                      key={o.id}
-                      onClick={() => setBetSheet({ optionId: o.id, marketId: m.id, label: o.label })}
-                      style={{
-                        flex: 1, padding: "0.7rem 0.5rem", borderRadius: "10px",
-                        border: `1px solid ${o.label === "Yes" ? GREEN : "#3A3F47"}`,
-                        background: o.label === "Yes" ? "rgba(0,230,118,0.08)" : "transparent",
-                        color: o.label === "Yes" ? GREEN : "#D6D9DE",
-                        fontWeight: 600, fontSize: "0.9rem",
-                      }}
-                    >
-                      {o.label} · {pct}%
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
       {betSheet && (
         <div style={{
-          position: "fixed", bottom: 0, left: 0, right: 0, background: "#171B21",
+          position: "fixed", bottom: "3.5rem", left: 0, right: 0, background: "#171B21",
           borderTop: `1px solid ${GREEN}`, borderRadius: "20px 20px 0 0", padding: "1.25rem",
         }}>
           <p style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, margin: "0 0 0.75rem" }}>
@@ -215,9 +279,14 @@ function App() {
             placeholder="Amount in ₦"
             style={{
               width: "100%", padding: "0.75rem", borderRadius: "10px", border: "1px solid #3A3F47",
-              background: "#0E1116", color: "#fff", fontSize: "1rem", marginBottom: "0.75rem", boxSizing: "border-box",
+              background: "#0E1116", color: "#fff", fontSize: "1rem", marginBottom: "0.5rem", boxSizing: "border-box",
             }}
           />
+          {stakeInput > 0 && (
+            <p style={{ color: GREEN, fontSize: "0.85rem", margin: "0 0 0.75rem" }}>
+              Estimated payout: ₦{estimatePayout().toFixed(0)} (if odds stay the same)
+            </p>
+          )}
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <button onClick={() => setBetSheet(null)} style={{
               flex: 1, padding: "0.75rem", borderRadius: "10px", border: "1px solid #3A3F47",
@@ -230,6 +299,24 @@ function App() {
           </div>
         </div>
       )}
+
+      <div style={{
+        position: "fixed", bottom: 0, left: 0, right: 0, background: "#171B21",
+        borderTop: "1px solid #232830", display: "flex", padding: "0.6rem 0",
+      }}>
+        <button
+          onClick={() => setView("markets")}
+          style={{ flex: 1, background: "none", border: "none", color: view === "markets" ? GREEN : "#8A9099", fontWeight: 600 }}
+        >
+          Markets
+        </button>
+        <button
+          onClick={() => { setView("profile"); loadProfile(); }}
+          style={{ flex: 1, background: "none", border: "none", color: view === "profile" ? GREEN : "#8A9099", fontWeight: 600 }}
+        >
+          Profile
+        </button>
+      </div>
     </div>
   );
 }
