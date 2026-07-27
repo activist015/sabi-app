@@ -52,10 +52,21 @@ function App() {
   }, []);
 
   async function placeBet(optionId, marketId) {
-    const amountStr = window.prompt("How much do you want to stake (₦)?");
-    const amount = Number(amountStr);
-    if (!amount || amount <= 0) return;
-    if (amount > balance) return alert("You don't have enough balance for that.");
+  const amountStr = window.prompt("How much do you want to stake (₦)?");
+  const amount = Number(amountStr);
+  if (!amount || amount <= 0) return;
+
+  const { error } = await supabase.rpc("place_bet", {
+    p_user_id: userId,
+    p_market_id: marketId,
+    p_option_id: optionId,
+    p_amount: amount,
+  });
+
+  if (error) return alert(error.message);
+  alert("Bet placed!");
+  window.location.reload();
+}
 
     await supabase.from("bets").insert({ market_id: marketId, option_id: optionId, user_id: userId, amount });
 
