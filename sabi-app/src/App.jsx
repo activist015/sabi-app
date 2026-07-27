@@ -19,9 +19,9 @@ function App() {
   const [trendingIds, setTrendingIds] = useState([]);
   const [activeTab, setActiveTab] = useState("Trending");
   const [activeSub, setActiveSub] = useState("All");
-  const [betSheet, setBetSheet] = useState(null); // { optionId, marketId, label }
+  const [betSheet, setBetSheet] = useState(null);
   const [stakeInput, setStakeInput] = useState("");
-  const [view, setView] = useState("markets"); // "markets" | "profile"
+  const [view, setView] = useState("markets");
   const [profile, setProfile] = useState(null);
 
   useEffect(() => {
@@ -133,7 +133,15 @@ function App() {
   return (
     <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif", paddingBottom: "4rem" }}>
       <div style={{ padding: "1.5rem 1.25rem 0.5rem" }}>
-        <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem", color: GREEN }}>
+            ●
+          </span>
+          <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem" }}>
+            Sabi
+          </span>
+        </div>
+        <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.3rem", margin: "0.6rem 0 0" }}>
           Hello, {name}
         </h1>
         <p style={{ color: "#8A9099", margin: "0.4rem 0 0", fontSize: "0.95rem" }}>
