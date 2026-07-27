@@ -4,12 +4,22 @@ import { supabase } from "./supabaseClient";
 const GREEN = "#00E676";
 const DARK = "#0E1116";
 
+const CATEGORY_GROUPS = {
+  Sport: ["football", "basketball", "chess", "badminton"],
+  Politics: ["politics"],
+  National: ["national"],
+  Global: ["global"],
+};
+
 function App() {
   const [name, setName] = useState("friend");
   const [userId, setUserId] = useState(null);
   const [balance, setBalance] = useState(0);
   const [markets, setMarkets] = useState([]);
-  const [betSheet, setBetSheet] = useState(null); // { optionId, marketId, label }
+  const [trendingIds, setTrendingIds] = useState([]);
+  const [activeTab, setActiveTab] = useState("Trending"); // Trending | Sport | Politics | National | Global
+  const [activeSub, setActiveSub] = useState("All");
+  const [betSheet, setBetSheet] = useState(null);
   const [stakeInput, setStakeInput] = useState("");
 
   useEffect(() => {
@@ -39,9 +49,25 @@ function App() {
           setBalance(Number(userRow.wallet_balance));
         }
       }
+
       const { data: marketData } = await supabase
         .from("markets").select("*, options(*)").eq("status", "open");
       setMarkets(marketData || []);
+
+      // Trending: sum bet amounts per market in the last 24h, take top 3
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentBets } = await supabase
+        .from("bets").select("market_id, amount").gte("placed_at", since);
+
+      const totals = {};
+      (recentBets || []).forEach((b) => {
+        totals[b.market_id] = (totals[b.market_id] || 0) + Number(b.amount);
+      });
+      const top = Object.entries(totals)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([id]) => id);
+      setTrendingIds(top);
     }
     setup();
   }, []);
@@ -61,6 +87,22 @@ function App() {
     window.location.reload();
   }
 
+  // Filter markets based on active tab/sub-filter
+  let visibleMarkets = markets;
+  if (activeTab === "Trending") {
+    visibleMarkets = markets
+      .filter((m) => trendingIds.includes(m.id))
+      .sort((a, b) => trendingIds.indexOf(a.id) - trendingIds.indexOf(b.id));
+  } else {
+    const allowedCategories = CATEGORY_GROUPS[activeTab] || [];
+    visibleMarkets = markets.filter((m) => allowedCategories.includes(m.category));
+    if (activeSub !== "All") {
+      visibleMarkets = visibleMarkets.filter((m) => m.category === activeSub.toLowerCase());
+    }
+  }
+
+  const subChips = CATEGORY_GROUPS[activeTab];
+
   return (
     <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif" }}>
       <div style={{ padding: "1.5rem 1.25rem 0.5rem" }}>
@@ -72,12 +114,55 @@ function App() {
         </p>
       </div>
 
-      <div style={{ padding: "1rem 1.25rem" }}>
-        <p style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.05rem", margin: "0 0 0.75rem" }}>
-          Open Markets
-        </p>
+      {/* Top-level tabs */}
+      <div style={{ display: "flex", gap: "0.5rem", padding: "0.75rem 1.25rem 0", overflowX: "auto" }}>
+        {["Trending", ...Object.keys(CATEGORY_GROUPS)].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => { setActiveTab(tab); setActiveSub("All"); }}
+            style={{
+              padding: "0.45rem 0.9rem", borderRadius: "20px", whiteSpace: "nowrap",
+              border: `1px solid ${activeTab === tab ? GREEN : "#3A3F47"}`,
+              background: activeTab === tab ? GREEN : "transparent",
+              color: activeTab === tab ? DARK : "#D6D9DE",
+              fontWeight: 600, fontSize: "0.85rem",
+            }}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
-        {markets.map((m) => {
+      {/* Sub-filter chips, only when a group with multiple sub-categories is active */}
+      {subChips && subChips.length > 1 && (
+        <div style={{ display: "flex", gap: "0.4rem", padding: "0.6rem 1.25rem 0", overflowX: "auto" }}>
+          {["All", ...subChips].map((sub) => {
+            const label = sub === "All" ? "All" : sub[0].toUpperCase() + sub.slice(1);
+            return (
+              <button
+                key={sub}
+                onClick={() => setActiveSub(label)}
+                style={{
+                  padding: "0.3rem 0.7rem", borderRadius: "16px", whiteSpace: "nowrap",
+                  border: "1px solid #2A2F37",
+                  background: activeSub === label ? "#232830" : "transparent",
+                  color: activeSub === label ? GREEN : "#8A9099",
+                  fontSize: "0.78rem", fontWeight: 500,
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ padding: "1rem 1.25rem" }}>
+        {visibleMarkets.length === 0 && (
+          <p style={{ color: "#6C7280", fontSize: "0.9rem" }}>Nothing here yet.</p>
+        )}
+
+        {visibleMarkets.map((m) => {
           const total = m.options.reduce((s, o) => s + Number(o.total_staked), 0) || 1;
           return (
             <div key={m.id} style={{
@@ -90,7 +175,6 @@ function App() {
               <p style={{ color: "#6C7280", fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
                 {m.category}
               </p>
-
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 {m.options.map((o) => {
                   const pct = Math.round((Number(o.total_staked) / total) * 100);
