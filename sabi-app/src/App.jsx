@@ -21,8 +21,12 @@ function App() {
   const [activeSub, setActiveSub] = useState("All");
   const [betSheet, setBetSheet] = useState(null);
   const [stakeInput, setStakeInput] = useState("");
-  const [view, setView] = useState("markets");
+  const [view, setView] = useState("markets"); // "markets" | "profile" | "leaderboard"
   const [profile, setProfile] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [openComments, setOpenComments] = useState(null);
+  const [commentsByMarket, setCommentsByMarket] = useState({});
+  const [commentInput, setCommentInput] = useState("");
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -76,6 +80,40 @@ function App() {
   async function loadProfile() {
     const { data } = await supabase.from("users").select("*").eq("id", userId).single();
     setProfile(data);
+  }
+
+  async function loadLeaderboard() {
+    const { data } = await supabase
+      .from("users")
+      .select("first_name, win_rate, total_profit, best_streak")
+      .not("win_rate", "is", null)
+      .order("total_profit", { ascending: false })
+      .limit(10);
+    setLeaderboard(data || []);
+  }
+
+  async function loadComments(marketId) {
+    const { data } = await supabase
+      .from("comments")
+      .select("*, users(first_name)")
+      .eq("market_id", marketId)
+      .order("created_at", { ascending: true });
+    setCommentsByMarket((prev) => ({ ...prev, [marketId]: data || [] }));
+  }
+
+  function toggleComments(marketId) {
+    if (openComments === marketId) setOpenComments(null);
+    else { setOpenComments(marketId); loadComments(marketId); }
+  }
+
+  async function postComment(marketId) {
+    if (!commentInput.trim()) return;
+    const { error } = await supabase.from("comments").insert({
+      market_id: marketId, user_id: userId, content: commentInput.trim(),
+    });
+    if (error) return alert(error.message);
+    setCommentInput("");
+    loadComments(marketId);
   }
 
   async function confirmBet() {
@@ -134,18 +172,11 @@ function App() {
     <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif", paddingBottom: "4rem" }}>
       <div style={{ padding: "1.5rem 1.25rem 0.5rem" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem", color: GREEN }}>
-            ●
-          </span>
-          <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem" }}>
-            Sabi
-          </span>
+          <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem", color: GREEN }}>●</span>
+          <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem" }}>Sabi</span>
         </div>
-        <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.3rem", margin: "0.6rem 0 0" }}>
-          Hello, {name}
-        </h1>
-        <p style={{ color: "#8A9099", margin: "0.4rem 0 0", fontSize: "0.95rem" }}>
-          Balance <span style={{ color: GREEN, fontWeight: 600 }}>₦{balance.toLocaleString()}</span>
+        <p style={{ color: "#8A9099", margin: "0.5rem 0 0", fontSize: "0.95rem" }}>
+          Hello, {name} · <span style={{ color: GREEN, fontWeight: 600 }}>₦{balance.toLocaleString()}</span>
         </p>
       </div>
 
@@ -230,6 +261,39 @@ function App() {
                       );
                     })}
                   </div>
+
+                  <button
+                    onClick={() => toggleComments(m.id)}
+                    style={{ marginTop: "0.75rem", background: "none", border: "none", color: "#8A9099", fontSize: "0.8rem", padding: 0 }}
+                  >
+                    💬 {openComments === m.id ? "Hide comments" : "Comments"}
+                  </button>
+
+                  {openComments === m.id && (
+                    <div style={{ marginTop: "0.6rem" }}>
+                      {(commentsByMarket[m.id] || []).map((c) => (
+                        <div key={c.id} style={{ marginBottom: "0.5rem" }}>
+                          <span style={{ color: GREEN, fontWeight: 600, fontSize: "0.8rem" }}>{c.users?.first_name || "Anon"}:</span>{" "}
+                          <span style={{ color: "#D6D9DE", fontSize: "0.85rem" }}>{c.content}</span>
+                        </div>
+                      ))}
+                      {(commentsByMarket[m.id] || []).length === 0 && (
+                        <p style={{ color: "#6C7280", fontSize: "0.8rem" }}>No comments yet — be the first.</p>
+                      )}
+                      <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
+                        <input
+                          value={commentInput}
+                          onChange={(e) => setCommentInput(e.target.value)}
+                          placeholder="Say something..."
+                          style={{ flex: 1, padding: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", fontSize: "0.85rem" }}
+                        />
+                        <button onClick={() => postComment(m.id)}
+                          style={{ padding: "0.5rem 0.8rem", borderRadius: "8px", border: "none", background: GREEN, color: DARK, fontWeight: 700, fontSize: "0.85rem" }}>
+                          Send
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -269,6 +333,27 @@ function App() {
               ₦{Number(profile.wallet_balance).toLocaleString()}
             </p>
           </div>
+        </div>
+      )}
+
+      {view === "leaderboard" && (
+        <div style={{ padding: "1.5rem 1.25rem 5rem" }}>
+          <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: "0 0 1.5rem" }}>
+            Leaderboard
+          </h1>
+          {leaderboard.map((u, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#171B21", border: "1px solid #232830", borderRadius: "12px", padding: "0.85rem 1rem", marginBottom: "0.6rem" }}>
+              <div>
+                <span style={{ color: GREEN, fontWeight: 700, marginRight: "0.6rem" }}>#{i + 1}</span>
+                <span style={{ fontWeight: 600 }}>{u.first_name}</span>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <p style={{ margin: 0, color: GREEN, fontWeight: 700 }}>₦{Number(u.total_profit).toLocaleString()}</p>
+                <p style={{ margin: 0, color: "#6C7280", fontSize: "0.75rem" }}>{u.win_rate}% win rate</p>
+              </div>
+            </div>
+          ))}
+          {leaderboard.length === 0 && <p style={{ color: "#6C7280" }}>No results yet.</p>}
         </div>
       )}
 
@@ -317,6 +402,12 @@ function App() {
           style={{ flex: 1, background: "none", border: "none", color: view === "markets" ? GREEN : "#8A9099", fontWeight: 600 }}
         >
           Markets
+        </button>
+        <button
+          onClick={() => { setView("leaderboard"); loadLeaderboard(); }}
+          style={{ flex: 1, background: "none", border: "none", color: view === "leaderboard" ? GREEN : "#8A9099", fontWeight: 600 }}
+        >
+          Leaderboard
         </button>
         <button
           onClick={() => { setView("profile"); loadProfile(); }}
