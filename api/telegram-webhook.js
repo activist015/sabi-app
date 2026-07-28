@@ -24,7 +24,7 @@ export default async function handler(req, res) {
       ],
     });
   } else if (message?.text === "/support") {
-    await sendMessage(message.chat.id, "Need direct help? Message @yourusername and we'll sort it out.");
+    await sendMessage(message.chat.id, "Need direct help? Message @defi_activist and we'll sort it out.");
   } else if (callback) {
     const answers = {
       help_bet: "If a bet won't go through, check your balance is enough and the market hasn't closed yet. Still stuck? Use /support.",
