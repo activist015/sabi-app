@@ -41,6 +41,14 @@ function App() {
   const [depositRequests, setDepositRequests] = useState([]);
   const [withdrawalRequests, setWithdrawalRequests] = useState([]);
 
+  const [walletTab, setWalletTab] = useState("deposit");
+  const [depositAmount, setDepositAmount] = useState("");
+  const [myDeposits, setMyDeposits] = useState([]);
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawAccount, setWithdrawAccount] = useState("");
+  const [withdrawBank, setWithdrawBank] = useState("");
+  const [myWithdrawals, setMyWithdrawals] = useState([]);
+
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
     let telegramUser = null;
@@ -195,7 +203,6 @@ function App() {
     return { yes, no };
   }
 
-  // ---- admin functions ----
   async function createMarket() {
     const { title, category, closeTime, rules, context } = newMarketForm;
     if (!title || !closeTime) return alert("Title and close time are required");
@@ -269,17 +276,62 @@ function App() {
   async function markWithdrawalPaid(req) {
     if (!window.confirm(`Confirm you've sent ₦${req.amount} to account ${req.account_number}?`)) return;
     const { data: user } = await supabase.from("users").select("wallet_balance").eq("id", req.user_id).single();
+    if (Number(user.wallet_balance) < Number(req.amount)) {
+      return alert("This user's current balance is lower than this request — check for duplicate/stale requests before approving.");
+    }
     const newBalance = Number(user.wallet_balance) - Number(req.amount);
     await supabase.from("users").update({ wallet_balance: newBalance }).eq("id", req.user_id);
-    await supabase.from("transactions").insert({ user_id: req.user_id, type: "withdrawal", amount: -req.amount, balance_after: newBalance });
+    await supabase.from("transactions").insert({ user_id: req.user_id, type: "withdrawal", amount: -req.amount, balance_after: newBalance, market_id: null });
     await supabase.from("withdrawal_requests").update({ status: "paid" }).eq("id", req.id);
     loadWithdrawalRequests();
   }
 
+  function referenceCode() {
+    return userId ? `SABI-${userId.slice(0, 4).toUpperCase()}` : "";
+  }
+
+  async function loadMyDeposits() {
+    const { data } = await supabase.from("deposit_requests").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    setMyDeposits(data || []);
+  }
+
+  async function submitDeposit() {
+    const amount = Number(depositAmount);
+    if (!amount || amount <= 0) return alert("Enter a valid amount");
+    const { error } = await supabase.from("deposit_requests").insert({ user_id: userId, amount, reference_code: referenceCode() });
+    if (error) return alert(error.message);
+    setDepositAmount("");
+    alert("Request submitted — it'll be credited manually once your payment is confirmed, not instantly.");
+    loadMyDeposits();
+  }
+
+  async function loadMyWithdrawals() {
+    const { data } = await supabase.from("withdrawal_requests").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    setMyWithdrawals(data || []);
+  }
+
+  async function submitWithdrawal() {
+    const amount = Number(withdrawAmount);
+    if (!amount || amount <= 0) return alert("Enter a valid amount");
+    if (amount > balance) return alert("You don't have enough balance for that.");
+    if (!withdrawAccount.trim() || !withdrawBank.trim()) return alert("Enter your account number and bank name");
+    const { error } = await supabase.from("withdrawal_requests").insert({
+      user_id: userId, amount, account_number: withdrawAccount.trim(), bank_name: withdrawBank.trim(),
+    });
+    if (error) return alert(error.message);
+    setWithdrawAmount(""); setWithdrawAccount(""); setWithdrawBank("");
+    alert("Request submitted — you'll receive it manually once processed, not instantly.");
+    loadMyWithdrawals();
+  }
+
   return (
     <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif", paddingBottom: "4rem" }}>
-      <div style={{ padding: "1.5rem 1.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-        <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem", color: GREEN }}>●</span>
+      <div style={{ padding: "1.5rem 1.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <svg width="26" height="26" viewBox="0 0 512 512" fill="none">
+          <path d="M 190 165 C 190 130, 250 125, 290 150 C 325 172, 325 205, 290 225 C 250 247, 250 280, 290 302 C 325 322, 325 355, 285 372"
+            stroke="#00E676" strokeWidth="42" strokeLinecap="round" strokeLinejoin="round"/>
+          <circle cx="352" cy="150" r="26" fill="#00E676"/>
+        </svg>
         <span style={{ fontFamily: "Space Grotesk, sans-serif", fontWeight: 700, fontSize: "1.4rem" }}>Sabi</span>
       </div>
       <div style={{ padding: "0 1.25rem 0.5rem" }}>
@@ -338,7 +390,7 @@ function App() {
                     <div onClick={() => openDetail(m)}>
                       <p style={{ fontWeight: 600, fontSize: "0.98rem", margin: "0 0 0.2rem", lineHeight: 1.35 }}>{m.title}</p>
                       <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                        {m.category} · {m.candidates.length} candidates
+                        {m.category} · {m.candidates.length} contenders
                       </p>
                     </div>
                     {top2.map((cand) => {
@@ -361,7 +413,7 @@ function App() {
                       );
                     })}
                     <button onClick={() => openDetail(m)} style={{ background: "none", border: "none", color: GREEN, fontSize: "0.8rem", padding: 0, marginTop: "0.3rem" }}>
-                      View all {m.candidates.length} candidates →
+                      View all {m.candidates.length} contenders →
                     </button>
                   </div>
                 );
@@ -433,6 +485,84 @@ function App() {
         </div>
       )}
 
+      {view === "wallet" && (
+        <div style={{ padding: "1.5rem 1.25rem 5rem" }}>
+          <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: "0 0 1rem" }}>Wallet</h1>
+
+          <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "14px", padding: "1rem", marginBottom: "1.25rem" }}>
+            <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.3rem" }}>Balance</p>
+            <p style={{ color: GREEN, fontWeight: 700, fontSize: "1.3rem", margin: 0 }}>₦{balance.toLocaleString()}</p>
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+            {["deposit", "withdraw"].map((t) => (
+              <button key={t} onClick={() => setWalletTab(t)}
+                style={{ flex: 1, padding: "0.5rem", borderRadius: "8px", border: `1px solid ${walletTab === t ? GREEN : "#3A3F47"}`,
+                  background: walletTab === t ? "rgba(0,230,118,0.08)" : "transparent",
+                  color: walletTab === t ? GREEN : "#D6D9DE", fontWeight: 600, textTransform: "capitalize" }}>
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {walletTab === "deposit" && (
+            <div>
+              <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "1rem", marginBottom: "1rem" }}>
+                <p style={{ margin: "0 0 0.4rem", fontSize: "0.85rem", color: "#D6D9DE" }}>
+                  Send to: <strong>UBA</strong> · <strong>2350907121</strong>
+                </p>
+                <p style={{ margin: 0, fontSize: "0.85rem", color: GREEN }}>
+                  Include this code in your transfer note: <strong>{referenceCode()}</strong>
+                </p>
+              </div>
+              <p style={{ color: MUTED, fontSize: "0.78rem", marginBottom: "0.75rem" }}>
+                ⚠️ Deposits are credited manually — your balance won't update instantly after sending money.
+              </p>
+              <input type="number" placeholder="Amount sent (₦)" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)}
+                style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", marginBottom: "0.6rem", boxSizing: "border-box" }} />
+              <button onClick={submitDeposit} style={{ width: "100%", padding: "0.75rem", borderRadius: "10px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>
+                I've Sent It
+              </button>
+
+              <p style={{ fontWeight: 600, margin: "1.5rem 0 0.6rem" }}>Your Requests</p>
+              {myDeposits.map((r) => (
+                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", background: CARD, border: `1px solid ${BORDER}`, borderRadius: "10px", padding: "0.7rem 0.9rem", marginBottom: "0.5rem" }}>
+                  <span style={{ fontSize: "0.85rem" }}>₦{r.amount}</span>
+                  <span style={{ fontSize: "0.8rem", color: r.status === "credited" ? GREEN : r.status === "rejected" ? "#FF5C5C" : "#8A9099" }}>{r.status}</span>
+                </div>
+              ))}
+              {myDeposits.length === 0 && <p style={{ color: MUTED, fontSize: "0.85rem" }}>No requests yet.</p>}
+            </div>
+          )}
+
+          {walletTab === "withdraw" && (
+            <div>
+              <input type="number" placeholder="Amount to withdraw (₦)" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)}
+                style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", marginBottom: "0.6rem", boxSizing: "border-box" }} />
+              <input placeholder="Account number" value={withdrawAccount} onChange={(e) => setWithdrawAccount(e.target.value)}
+                style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", marginBottom: "0.6rem", boxSizing: "border-box" }} />
+              <input placeholder="Bank name" value={withdrawBank} onChange={(e) => setWithdrawBank(e.target.value)}
+                style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", marginBottom: "0.6rem", boxSizing: "border-box" }} />
+              <p style={{ color: MUTED, fontSize: "0.78rem", marginBottom: "0.6rem" }}>
+                ⚠️ Withdrawals are paid out manually — it won't arrive instantly.
+              </p>
+              <button onClick={submitWithdrawal} style={{ width: "100%", padding: "0.75rem", borderRadius: "10px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>
+                Request Withdrawal
+              </button>
+
+              <p style={{ fontWeight: 600, margin: "1.5rem 0 0.6rem" }}>Your Requests</p>
+              {myWithdrawals.map((r) => (
+                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", background: CARD, border: `1px solid ${BORDER}`, borderRadius: "10px", padding: "0.7rem 0.9rem", marginBottom: "0.5rem" }}>
+                  <span style={{ fontSize: "0.85rem" }}>₦{r.amount}</span>
+                  <span style={{ fontSize: "0.8rem", color: r.status === "paid" ? GREEN : r.status === "rejected" ? "#FF5C5C" : "#8A9099" }}>{r.status}</span>
+                </div>
+              ))}
+              {myWithdrawals.length === 0 && <p style={{ color: MUTED, fontSize: "0.85rem" }}>No requests yet.</p>}
+            </div>
+          )}
+        </div>
+      )}
+
       {view === "admin" && (
         <div style={{ padding: "1.5rem 1.25rem 5rem" }}>
           <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: "0 0 1rem" }}>Admin</h1>
@@ -456,7 +586,7 @@ function App() {
                   <button key={t} onClick={() => setNewMarketType(t)}
                     style={{ flex: 1, padding: "0.5rem", borderRadius: "8px", border: `1px solid ${newMarketType === t ? GREEN : "#3A3F47"}`,
                       background: newMarketType === t ? "rgba(0,230,118,0.08)" : "transparent", color: newMarketType === t ? GREEN : "#D6D9DE" }}>
-                    {t === "binary" ? "Yes/No" : "Multiple Candidates"}
+                    {t === "binary" ? "Yes/No" : "Multiple Contenders"}
                   </button>
                 ))}
               </div>
@@ -480,12 +610,12 @@ function App() {
               {newMarketType === "multi_candidate" && (
                 <div style={{ marginBottom: "0.5rem" }}>
                   {newCandidates.map((c, i) => (
-                    <input key={i} placeholder={`Candidate ${i + 1}`} value={c}
+                    <input key={i} placeholder={`Contender ${i + 1}`} value={c}
                       onChange={(e) => { const arr = [...newCandidates]; arr[i] = e.target.value; setNewCandidates(arr); }}
                       style={{ width: "100%", padding: "0.6rem", marginBottom: "0.4rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", boxSizing: "border-box" }} />
                   ))}
                   <button onClick={() => setNewCandidates([...newCandidates, ""])}
-                    style={{ background: "none", border: "none", color: GREEN, padding: 0 }}>+ Add candidate</button>
+                    style={{ background: "none", border: "none", color: GREEN, padding: 0 }}>+ Add contender</button>
                 </div>
               )}
               <button onClick={createMarket} style={{ width: "100%", padding: "0.75rem", borderRadius: "10px", border: "none", background: GREEN, color: DARK, fontWeight: 700, marginTop: "0.5rem" }}>
@@ -640,6 +770,7 @@ function App() {
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: CARD, borderTop: `1px solid ${BORDER}`, display: "flex", padding: "0.6rem 0", zIndex: 10 }}>
         <button onClick={() => setView("markets")} style={{ flex: 1, background: "none", border: "none", color: view === "markets" ? GREEN : "#8A9099", fontWeight: 600 }}>Markets</button>
         <button onClick={() => { setView("leaderboard"); loadLeaderboard(); }} style={{ flex: 1, background: "none", border: "none", color: view === "leaderboard" ? GREEN : "#8A9099", fontWeight: 600 }}>Leaderboard</button>
+        <button onClick={() => { setView("wallet"); loadMyDeposits(); loadMyWithdrawals(); }} style={{ flex: 1, background: "none", border: "none", color: view === "wallet" ? GREEN : "#8A9099", fontWeight: 600 }}>Wallet</button>
         <button onClick={() => { setView("profile"); loadProfile(); }} style={{ flex: 1, background: "none", border: "none", color: view === "profile" ? GREEN : "#8A9099", fontWeight: 600 }}>Profile</button>
         {isAdmin && (
           <button onClick={() => { setView("admin"); loadAdminMarkets(); loadDepositRequests(); loadWithdrawalRequests(); }}
