@@ -22,7 +22,7 @@ function App() {
   const [trendingIds, setTrendingIds] = useState([]);
   const [activeTab, setActiveTab] = useState("Trending");
   const [activeSub, setActiveSub] = useState("All");
-  const [betSheet, setBetSheet] = useState(null); // { optionId, marketId, label, groupOptions }
+  const [betSheet, setBetSheet] = useState(null);
   const [stakeInput, setStakeInput] = useState("");
   const [view, setView] = useState("markets");
   const [profile, setProfile] = useState(null);
@@ -31,6 +31,15 @@ function App() {
   const [detailTab, setDetailTab] = useState("rules");
   const [commentsByMarket, setCommentsByMarket] = useState({});
   const [commentInput, setCommentInput] = useState("");
+
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminTab, setAdminTab] = useState("create");
+  const [newMarketType, setNewMarketType] = useState("binary");
+  const [newMarketForm, setNewMarketForm] = useState({ title: "", category: "football", closeTime: "", rules: "", context: "" });
+  const [newCandidates, setNewCandidates] = useState([""]);
+  const [adminMarkets, setAdminMarkets] = useState([]);
+  const [depositRequests, setDepositRequests] = useState([]);
+  const [withdrawalRequests, setWithdrawalRequests] = useState([]);
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -58,6 +67,10 @@ function App() {
           setUserId(userRow.id);
           setBalance(Number(userRow.wallet_balance));
         }
+
+        const { data: adminRow } = await supabase
+          .from("admins").select("telegram_id").eq("telegram_id", telegramUser.id).maybeSingle();
+        if (adminRow) setIsAdmin(true);
       }
 
       const { data: marketData } = await supabase
@@ -149,7 +162,6 @@ function App() {
 
     const newWinningTotal = chosenTotal + amount;
     const newTotalPool = chosenTotal + otherTotal + amount;
-    // rake_percent lives on the market, look it up via detailMarket or markets list
     const market = markets.find((m) => m.id === betSheet.marketId);
     const rake = market ? Number(market.rake_percent) : 5;
     const payoutPool = newTotalPool * (1 - rake / 100);
@@ -181,6 +193,87 @@ function App() {
     const yes = cand.options.find((o) => o.label === "Yes");
     const no = cand.options.find((o) => o.label === "No");
     return { yes, no };
+  }
+
+  // ---- admin functions ----
+  async function createMarket() {
+    const { title, category, closeTime, rules, context } = newMarketForm;
+    if (!title || !closeTime) return alert("Title and close time are required");
+
+    const { data: market, error } = await supabase.from("markets").insert({
+      title, category, close_time: closeTime, rules_text: rules, context_text: context, market_type: newMarketType,
+    }).select().single();
+    if (error) return alert(error.message);
+
+    if (newMarketType === "binary") {
+      await supabase.from("options").insert([
+        { market_id: market.id, label: "Yes" },
+        { market_id: market.id, label: "No" },
+      ]);
+    } else {
+      for (const cname of newCandidates.filter((n) => n.trim())) {
+        const { data: cand } = await supabase.from("candidates").insert({ market_id: market.id, name: cname.trim() }).select().single();
+        await supabase.from("options").insert([
+          { market_id: market.id, candidate_id: cand.id, label: "Yes" },
+          { market_id: market.id, candidate_id: cand.id, label: "No" },
+        ]);
+      }
+    }
+    alert("Market created!");
+    setNewMarketForm({ title: "", category: "football", closeTime: "", rules: "", context: "" });
+    setNewCandidates([""]);
+    window.location.reload();
+  }
+
+  async function loadAdminMarkets() {
+    const { data } = await supabase.from("markets").select("*, options(*), candidates(*, options(*))").eq("status", "open");
+    setAdminMarkets(data || []);
+  }
+
+  async function resolveBinaryAdmin(marketId, optionId) {
+    if (!window.confirm("Resolve this market? This pays real money and can't be undone.")) return;
+    const { error } = await supabase.rpc("resolve_market", { p_market_id: marketId, p_winning_option_id: optionId });
+    if (error) return alert(error.message);
+    alert("Resolved!");
+    loadAdminMarkets();
+  }
+
+  async function resolveMultiCandidateAdmin(marketId, candidateId) {
+    if (!window.confirm("Resolve this market? This pays real money and can't be undone.")) return;
+    const { error } = await supabase.rpc("resolve_multi_candidate_market", { p_market_id: marketId, p_winning_candidate_id: candidateId });
+    if (error) return alert(error.message);
+    alert("Resolved!");
+    loadAdminMarkets();
+  }
+
+  async function loadDepositRequests() {
+    const { data } = await supabase.from("deposit_requests").select("*, users(first_name)").eq("status", "pending").order("created_at");
+    setDepositRequests(data || []);
+  }
+
+  async function creditDeposit(req) {
+    if (!window.confirm(`Credit ₦${req.amount} to ${req.users.first_name}?`)) return;
+    const { data: user } = await supabase.from("users").select("wallet_balance").eq("id", req.user_id).single();
+    const newBalance = Number(user.wallet_balance) + Number(req.amount);
+    await supabase.from("users").update({ wallet_balance: newBalance }).eq("id", req.user_id);
+    await supabase.from("transactions").insert({ user_id: req.user_id, type: "deposit", amount: req.amount, balance_after: newBalance });
+    await supabase.from("deposit_requests").update({ status: "credited" }).eq("id", req.id);
+    loadDepositRequests();
+  }
+
+  async function loadWithdrawalRequests() {
+    const { data } = await supabase.from("withdrawal_requests").select("*, users(first_name)").eq("status", "pending").order("created_at");
+    setWithdrawalRequests(data || []);
+  }
+
+  async function markWithdrawalPaid(req) {
+    if (!window.confirm(`Confirm you've sent ₦${req.amount} to account ${req.account_number}?`)) return;
+    const { data: user } = await supabase.from("users").select("wallet_balance").eq("id", req.user_id).single();
+    const newBalance = Number(user.wallet_balance) - Number(req.amount);
+    await supabase.from("users").update({ wallet_balance: newBalance }).eq("id", req.user_id);
+    await supabase.from("transactions").insert({ user_id: req.user_id, type: "withdrawal", amount: -req.amount, balance_after: newBalance });
+    await supabase.from("withdrawal_requests").update({ status: "paid" }).eq("id", req.id);
+    loadWithdrawalRequests();
   }
 
   return (
@@ -274,7 +367,6 @@ function App() {
                 );
               }
 
-              // binary market
               const opts = directOptions(m);
               const yes = opts.find((o) => o.label === "Yes");
               const no = opts.find((o) => o.label === "No");
@@ -341,7 +433,108 @@ function App() {
         </div>
       )}
 
-      {/* DETAIL VIEW OVERLAY */}
+      {view === "admin" && (
+        <div style={{ padding: "1.5rem 1.25rem 5rem" }}>
+          <h1 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.6rem", margin: "0 0 1rem" }}>Admin</h1>
+
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem", overflowX: "auto" }}>
+            {["create", "resolve", "deposits", "withdrawals"].map((t) => (
+              <button key={t} onClick={() => setAdminTab(t)}
+                style={{ padding: "0.4rem 0.8rem", borderRadius: "16px", whiteSpace: "nowrap",
+                  border: `1px solid ${adminTab === t ? GREEN : "#3A3F47"}`,
+                  background: adminTab === t ? GREEN : "transparent",
+                  color: adminTab === t ? DARK : "#D6D9DE", fontWeight: 600, fontSize: "0.8rem", textTransform: "capitalize" }}>
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {adminTab === "create" && (
+            <div>
+              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                {["binary", "multi_candidate"].map((t) => (
+                  <button key={t} onClick={() => setNewMarketType(t)}
+                    style={{ flex: 1, padding: "0.5rem", borderRadius: "8px", border: `1px solid ${newMarketType === t ? GREEN : "#3A3F47"}`,
+                      background: newMarketType === t ? "rgba(0,230,118,0.08)" : "transparent", color: newMarketType === t ? GREEN : "#D6D9DE" }}>
+                    {t === "binary" ? "Yes/No" : "Multiple Candidates"}
+                  </button>
+                ))}
+              </div>
+              <input placeholder="Title" value={newMarketForm.title}
+                onChange={(e) => setNewMarketForm({ ...newMarketForm, title: e.target.value })}
+                style={{ width: "100%", padding: "0.6rem", marginBottom: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", boxSizing: "border-box" }} />
+              <select value={newMarketForm.category} onChange={(e) => setNewMarketForm({ ...newMarketForm, category: e.target.value })}
+                style={{ width: "100%", padding: "0.6rem", marginBottom: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff" }}>
+                {["football","basketball","chess","badminton","politics","national","global"].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <input type="datetime-local" value={newMarketForm.closeTime}
+                onChange={(e) => setNewMarketForm({ ...newMarketForm, closeTime: e.target.value })}
+                style={{ width: "100%", padding: "0.6rem", marginBottom: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", boxSizing: "border-box" }} />
+              <textarea placeholder="Rules" value={newMarketForm.rules}
+                onChange={(e) => setNewMarketForm({ ...newMarketForm, rules: e.target.value })}
+                style={{ width: "100%", padding: "0.6rem", marginBottom: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", boxSizing: "border-box" }} />
+              <textarea placeholder="Context" value={newMarketForm.context}
+                onChange={(e) => setNewMarketForm({ ...newMarketForm, context: e.target.value })}
+                style={{ width: "100%", padding: "0.6rem", marginBottom: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", boxSizing: "border-box" }} />
+
+              {newMarketType === "multi_candidate" && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  {newCandidates.map((c, i) => (
+                    <input key={i} placeholder={`Candidate ${i + 1}`} value={c}
+                      onChange={(e) => { const arr = [...newCandidates]; arr[i] = e.target.value; setNewCandidates(arr); }}
+                      style={{ width: "100%", padding: "0.6rem", marginBottom: "0.4rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", boxSizing: "border-box" }} />
+                  ))}
+                  <button onClick={() => setNewCandidates([...newCandidates, ""])}
+                    style={{ background: "none", border: "none", color: GREEN, padding: 0 }}>+ Add candidate</button>
+                </div>
+              )}
+              <button onClick={createMarket} style={{ width: "100%", padding: "0.75rem", borderRadius: "10px", border: "none", background: GREEN, color: DARK, fontWeight: 700, marginTop: "0.5rem" }}>
+                Create Market
+              </button>
+            </div>
+          )}
+
+          {adminTab === "resolve" && adminMarkets.map((m) => (
+            <div key={m.id} style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "0.9rem", marginBottom: "0.7rem" }}>
+              <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>{m.title}</p>
+              {m.market_type === "binary" ? (
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  {m.options.filter(o => !o.candidate_id).map((o) => (
+                    <button key={o.id} onClick={() => resolveBinaryAdmin(m.id, o.id)}
+                      style={{ flex: 1, padding: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "transparent", color: "#D6D9DE" }}>
+                      {o.label} wins
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                m.candidates.map((c) => (
+                  <button key={c.id} onClick={() => resolveMultiCandidateAdmin(m.id, c.id)}
+                    style={{ display: "block", width: "100%", padding: "0.5rem", marginBottom: "0.3rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "transparent", color: "#D6D9DE", textAlign: "left" }}>
+                    {c.name} wins
+                  </button>
+                ))
+              )}
+            </div>
+          ))}
+
+          {adminTab === "deposits" && depositRequests.map((r) => (
+            <div key={r.id} style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "0.9rem", marginBottom: "0.7rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div><p style={{ margin: 0, fontWeight: 600 }}>{r.users.first_name}</p><p style={{ margin: 0, color: MUTED, fontSize: "0.8rem" }}>Ref: {r.reference_code} · ₦{r.amount}</p></div>
+              <button onClick={() => creditDeposit(r)} style={{ padding: "0.5rem 0.8rem", borderRadius: "8px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>Credit</button>
+            </div>
+          ))}
+          {adminTab === "deposits" && depositRequests.length === 0 && <p style={{ color: MUTED }}>No pending deposits.</p>}
+
+          {adminTab === "withdrawals" && withdrawalRequests.map((r) => (
+            <div key={r.id} style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "0.9rem", marginBottom: "0.7rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div><p style={{ margin: 0, fontWeight: 600 }}>{r.users.first_name}</p><p style={{ margin: 0, color: MUTED, fontSize: "0.8rem" }}>{r.bank_name} · {r.account_number} · ₦{r.amount}</p></div>
+              <button onClick={() => markWithdrawalPaid(r)} style={{ padding: "0.5rem 0.8rem", borderRadius: "8px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>Mark Paid</button>
+            </div>
+          ))}
+          {adminTab === "withdrawals" && withdrawalRequests.length === 0 && <p style={{ color: MUTED }}>No pending withdrawals.</p>}
+        </div>
+      )}
+
       {detailMarket && (
         <div style={{ position: "fixed", inset: 0, background: DARK, zIndex: 20, overflowY: "auto" }}>
           <div style={{ padding: "1.25rem" }}>
@@ -448,6 +641,12 @@ function App() {
         <button onClick={() => setView("markets")} style={{ flex: 1, background: "none", border: "none", color: view === "markets" ? GREEN : "#8A9099", fontWeight: 600 }}>Markets</button>
         <button onClick={() => { setView("leaderboard"); loadLeaderboard(); }} style={{ flex: 1, background: "none", border: "none", color: view === "leaderboard" ? GREEN : "#8A9099", fontWeight: 600 }}>Leaderboard</button>
         <button onClick={() => { setView("profile"); loadProfile(); }} style={{ flex: 1, background: "none", border: "none", color: view === "profile" ? GREEN : "#8A9099", fontWeight: 600 }}>Profile</button>
+        {isAdmin && (
+          <button onClick={() => { setView("admin"); loadAdminMarkets(); loadDepositRequests(); loadWithdrawalRequests(); }}
+            style={{ flex: 1, background: "none", border: "none", color: view === "admin" ? GREEN : "#8A9099", fontWeight: 600 }}>
+            Admin
+          </button>
+        )}
       </div>
     </div>
   );
