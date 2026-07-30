@@ -524,7 +524,7 @@ function App() {
             <div>
               <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "1rem", marginBottom: "1rem" }}>
                 <p style={{ margin: "0 0 0.4rem", fontSize: "0.85rem", color: "#D6D9DE" }}>
-                  Send to: <strong>[United Bank of Africa(UBA)]</strong> · <strong>[2350907121]</strong>
+                  Send to: <strong>United Bank of Africa(UBA)</strong> · <strong>2350907121</strong>
                 </p>
                 <p style={{ margin: 0, fontSize: "0.85rem", color: GREEN }}>
                   Include this code in your transfer note: <strong>{referenceCode()}</strong>
