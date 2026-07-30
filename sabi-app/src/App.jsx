@@ -6,6 +6,7 @@ const DARK = "#0E1116";
 const CARD = "#171B21";
 const BORDER = "#232830";
 const MUTED = "#6C7280";
+const MIN_WITHDRAWAL = 100;
 
 const CATEGORY_GROUPS = {
   Sport: ["football", "basketball", "chess", "badminton"],
@@ -49,6 +50,9 @@ function App() {
   const [withdrawBank, setWithdrawBank] = useState("");
   const [myWithdrawals, setMyWithdrawals] = useState([]);
 
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardStep, setOnboardStep] = useState(0);
+
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
     let telegramUser = null;
@@ -74,6 +78,7 @@ function App() {
         if (userRow) {
           setUserId(userRow.id);
           setBalance(Number(userRow.wallet_balance));
+          if (!userRow.has_onboarded) setShowOnboarding(true);
         }
 
         const { data: adminRow } = await supabase
@@ -87,18 +92,28 @@ function App() {
         .eq("status", "open");
       setMarkets(marketData || []);
 
+      const openIds = new Set((marketData || []).map((m) => m.id));
+
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: recentBets } = await supabase
         .from("bets").select("market_id, amount").gte("placed_at", since);
+
       const totals = {};
       (recentBets || []).forEach((b) => {
-        totals[b.market_id] = (totals[b.market_id] || 0) + Number(b.amount);
+        if (openIds.has(b.market_id)) {
+          totals[b.market_id] = (totals[b.market_id] || 0) + Number(b.amount);
+        }
       });
       const top = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id);
       setTrendingIds(top);
     }
     setup();
   }, []);
+
+  async function finishOnboarding() {
+    await supabase.from("users").update({ has_onboarded: true }).eq("id", userId);
+    setShowOnboarding(false);
+  }
 
   async function loadProfile() {
     const { data } = await supabase.from("users").select("*").eq("id", userId).single();
@@ -312,7 +327,7 @@ function App() {
 
   async function submitWithdrawal() {
     const amount = Number(withdrawAmount);
-    if (!amount || amount <= 0) return alert("Enter a valid amount");
+    if (!amount || amount < MIN_WITHDRAWAL) return alert(`Minimum withdrawal is ₦${MIN_WITHDRAWAL}`);
     if (amount > balance) return alert("You don't have enough balance for that.");
     if (!withdrawAccount.trim() || !withdrawBank.trim()) return alert("Enter your account number and bank name");
     const { error } = await supabase.from("withdrawal_requests").insert({
@@ -509,7 +524,7 @@ function App() {
             <div>
               <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "1rem", marginBottom: "1rem" }}>
                 <p style={{ margin: "0 0 0.4rem", fontSize: "0.85rem", color: "#D6D9DE" }}>
-                  Send to: <strong>UBA</strong> · <strong>2350907121</strong>
+                  Send to: <strong>[United Bank of Africa(UBA)]</strong> · <strong>[2350907121]</strong>
                 </p>
                 <p style={{ margin: 0, fontSize: "0.85rem", color: GREEN }}>
                   Include this code in your transfer note: <strong>{referenceCode()}</strong>
@@ -544,7 +559,7 @@ function App() {
               <input placeholder="Bank name" value={withdrawBank} onChange={(e) => setWithdrawBank(e.target.value)}
                 style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid #3A3F47", background: "#0E1116", color: "#fff", marginBottom: "0.6rem", boxSizing: "border-box" }} />
               <p style={{ color: MUTED, fontSize: "0.78rem", marginBottom: "0.6rem" }}>
-                ⚠️ Withdrawals are paid out manually — it won't arrive instantly.
+                ⚠️ Withdrawals are paid out manually — it won't arrive instantly. Minimum ₦{MIN_WITHDRAWAL}.
               </p>
               <button onClick={submitWithdrawal} style={{ width: "100%", padding: "0.75rem", borderRadius: "10px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>
                 Request Withdrawal
@@ -763,6 +778,47 @@ function App() {
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <button onClick={() => setBetSheet(null)} style={{ flex: 1, padding: "0.75rem", borderRadius: "10px", border: "1px solid #3A3F47", background: "transparent", color: "#D6D9DE", fontWeight: 600 }}>Cancel</button>
             <button onClick={confirmBet} style={{ flex: 1, padding: "0.75rem", borderRadius: "10px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>Confirm</button>
+          </div>
+        </div>
+      )}
+
+      {showOnboarding && (
+        <div style={{ position: "fixed", inset: 0, background: DARK, zIndex: 50, display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "2rem 1.5rem" }}>
+          <div>
+            {[
+              { title: "Predict what happens on campus", body: "Bet on FUL football, chess, SUG elections, and more — whoever calls it right wins the pool." },
+              { title: "Your stake decides your share", body: "Winners split the pool based on how much they put in. The more people bet the wrong way, the bigger your payout." },
+              { title: "Deposits & withdrawals are manual for now", body: "Send money to fund your wallet, and we'll credit it by hand. Withdrawals work the same way — just give us a bit of time." },
+            ].map((slide, i) => (
+              onboardStep === i && (
+                <div key={i}>
+                  <div style={{ width: "56px", height: "56px", borderRadius: "16px", background: "rgba(0,230,118,0.1)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "2rem" }}>
+                    <span style={{ color: GREEN, fontSize: "1.6rem", fontWeight: 700 }}>{i + 1}</span>
+                  </div>
+                  <h2 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.5rem", marginBottom: "0.75rem" }}>{slide.title}</h2>
+                  <p style={{ color: "#D6D9DE", fontSize: "0.95rem", lineHeight: 1.5 }}>{slide.body}</p>
+                </div>
+              )
+            ))}
+          </div>
+
+          <div>
+            <div style={{ display: "flex", gap: "0.4rem", justifyContent: "center", marginBottom: "1.5rem" }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{ width: "8px", height: "8px", borderRadius: "4px", background: onboardStep === i ? GREEN : "#3A3F47" }} />
+              ))}
+            </div>
+            <button
+              onClick={() => onboardStep < 2 ? setOnboardStep(onboardStep + 1) : finishOnboarding()}
+              style={{ width: "100%", padding: "0.9rem", borderRadius: "12px", border: "none", background: GREEN, color: DARK, fontWeight: 700, fontSize: "1rem" }}
+            >
+              {onboardStep < 2 ? "Next" : "Get Started"}
+            </button>
+            {onboardStep < 2 && (
+              <button onClick={finishOnboarding} style={{ width: "100%", padding: "0.75rem", background: "none", border: "none", color: "#8A9099", marginTop: "0.5rem" }}>
+                Skip
+              </button>
+            )}
           </div>
         </div>
       )}
