@@ -15,6 +15,16 @@ const CATEGORY_GROUPS = {
   Global: ["global"],
 };
 
+function timeLeft(closeTime) {
+  if (!closeTime) return "";
+  const diff = new Date(closeTime) - new Date();
+  if (diff <= 0) return "Closed";
+  const hours = Math.floor(diff / 3600000);
+  if (hours < 1) return `${Math.floor(diff / 60000)}m left`;
+  if (hours < 24) return `${hours}h left`;
+  return `${Math.floor(hours / 24)}d left`;
+}
+
 function App() {
   const [name, setName] = useState("friend");
   const [userId, setUserId] = useState(null);
@@ -32,15 +42,8 @@ function App() {
   const [detailTab, setDetailTab] = useState("rules");
   const [commentsByMarket, setCommentsByMarket] = useState({});
   const [commentInput, setCommentInput] = useState("");
-
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [adminTab, setAdminTab] = useState("create");
-  const [newMarketType, setNewMarketType] = useState("binary");
-  const [newMarketForm, setNewMarketForm] = useState({ title: "", category: "football", closeTime: "", rules: "", context: "" });
-  const [newCandidates, setNewCandidates] = useState([""]);
-  const [adminMarkets, setAdminMarkets] = useState([]);
-  const [depositRequests, setDepositRequests] = useState([]);
-  const [withdrawalRequests, setWithdrawalRequests] = useState([]);
+  const [onboardStep, setOnboardStep] = useState(0);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const [walletTab, setWalletTab] = useState("deposit");
   const [depositAmount, setDepositAmount] = useState("");
@@ -50,8 +53,14 @@ function App() {
   const [withdrawBank, setWithdrawBank] = useState("");
   const [myWithdrawals, setMyWithdrawals] = useState([]);
 
-  const [showOnboarding, setShowOnboarding] = useState(false);
-  const [onboardStep, setOnboardStep] = useState(0);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminTab, setAdminTab] = useState("create");
+  const [newMarketType, setNewMarketType] = useState("binary");
+  const [newMarketForm, setNewMarketForm] = useState({ title: "", category: "football", closeTime: "", rules: "", context: "" });
+  const [newCandidates, setNewCandidates] = useState([""]);
+  const [adminMarkets, setAdminMarkets] = useState([]);
+  const [depositRequests, setDepositRequests] = useState([]);
+  const [withdrawalRequests, setWithdrawalRequests] = useState([]);
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -97,7 +106,6 @@ function App() {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: recentBets } = await supabase
         .from("bets").select("market_id, amount").gte("placed_at", since);
-
       const totals = {};
       (recentBets || []).forEach((b) => {
         if (openIds.has(b.market_id)) {
@@ -151,11 +159,12 @@ function App() {
   }
 
   function directOptions(m) {
-    return (m.options || []).filter((o) => !o.candidate_id);
+    return (m?.options || []).filter((o) => !o.candidate_id);
   }
 
   function openBetSheet(optionId, marketId, label, groupOptions) {
-    setBetSheet({ optionId, marketId, label, groupOptions });
+    if (!optionId) return; // defensive: don't open a bet sheet on a broken option
+    setBetSheet({ optionId, marketId, label, groupOptions: groupOptions || [] });
   }
 
   async function confirmBet() {
@@ -180,7 +189,7 @@ function App() {
 
     const chosen = betSheet.groupOptions.find((o) => o.id === betSheet.optionId);
     const others = betSheet.groupOptions.filter((o) => o.id !== betSheet.optionId);
-    const otherTotal = others.reduce((s, o) => s + Number(o.total_staked), 0);
+    const otherTotal = others.reduce((s, o) => s + Number(o.total_staked || 0), 0);
     const chosenTotal = Number(chosen?.total_staked || 0);
 
     const newWinningTotal = chosenTotal + amount;
@@ -213,26 +222,60 @@ function App() {
   }
 
   function candidateOptions(cand) {
-    const yes = cand.options.find((o) => o.label === "Yes");
-    const no = cand.options.find((o) => o.label === "No");
+    const opts = cand?.options || [];
+    const yes = opts.find((o) => o.label === "Yes");
+    const no = opts.find((o) => o.label === "No");
     return { yes, no };
   }
 
-  function timeLeft(closeTime) {
-    const diff = new Date(closeTime) - new Date();
-    if (diff <= 0) return "Closed";
-    const hours = Math.floor(diff / 3600000);
-    if (hours < 1) return `${Math.floor(diff / 60000)}m left`;
-    if (hours < 24) return `${hours}h left`;
-    return `${Math.floor(hours / 24)}d left`;
+  function referenceCode() {
+    return userId ? `SABI-${userId.slice(0, 4).toUpperCase()}` : "";
   }
 
+  async function loadMyDeposits() {
+    const { data } = await supabase.from("deposit_requests").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    setMyDeposits(data || []);
+  }
+
+  async function submitDeposit() {
+    const amount = Number(depositAmount);
+    if (!amount || amount <= 0) return alert("Enter a valid amount");
+    const { error } = await supabase.from("deposit_requests").insert({ user_id: userId, amount, reference_code: referenceCode() });
+    if (error) return alert(error.message);
+    setDepositAmount("");
+    alert("Request submitted — it'll be credited manually once your payment is confirmed, not instantly.");
+    loadMyDeposits();
+  }
+
+  async function loadMyWithdrawals() {
+    const { data } = await supabase.from("withdrawal_requests").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    setMyWithdrawals(data || []);
+  }
+
+  async function submitWithdrawal() {
+    const amount = Number(withdrawAmount);
+    if (!amount || amount < MIN_WITHDRAWAL) return alert(`Minimum withdrawal is ₦${MIN_WITHDRAWAL}`);
+    if (amount > balance) return alert("You don't have enough balance for that.");
+    if (!withdrawAccount.trim() || !withdrawBank.trim()) return alert("Enter your account number and bank name");
+    const { error } = await supabase.from("withdrawal_requests").insert({
+      user_id: userId, amount, account_number: withdrawAccount.trim(), bank_name: withdrawBank.trim(),
+    });
+    if (error) return alert(error.message);
+    setWithdrawAmount(""); setWithdrawAccount(""); setWithdrawBank("");
+    alert("Request submitted — you'll receive it manually once processed, not instantly.");
+    loadMyWithdrawals();
+  }
+
+  // ---- admin functions ----
   async function createMarket() {
     const { title, category, closeTime, rules, context } = newMarketForm;
     if (!title || !closeTime) return alert("Title and close time are required");
 
+    // convert the datetime-local string using local time correctly, so it doesn't drift by your timezone offset
+    const closeTimeIso = new Date(closeTime).toISOString();
+
     const { data: market, error } = await supabase.from("markets").insert({
-      title, category, close_time: closeTime, rules_text: rules, context_text: context, market_type: newMarketType,
+      title, category, close_time: closeTimeIso, rules_text: rules, context_text: context, market_type: newMarketType,
     }).select().single();
     if (error) return alert(error.message);
 
@@ -243,7 +286,8 @@ function App() {
       ]);
     } else {
       for (const cname of newCandidates.filter((n) => n.trim())) {
-        const { data: cand } = await supabase.from("candidates").insert({ market_id: market.id, name: cname.trim() }).select().single();
+        const { data: cand, error: candErr } = await supabase.from("candidates").insert({ market_id: market.id, name: cname.trim() }).select().single();
+        if (candErr || !cand) continue;
         await supabase.from("options").insert([
           { market_id: market.id, candidate_id: cand.id, label: "Yes" },
           { market_id: market.id, candidate_id: cand.id, label: "No" },
@@ -310,44 +354,6 @@ function App() {
     loadWithdrawalRequests();
   }
 
-  function referenceCode() {
-    return userId ? `SABI-${userId.slice(0, 4).toUpperCase()}` : "";
-  }
-
-  async function loadMyDeposits() {
-    const { data } = await supabase.from("deposit_requests").select("*").eq("user_id", userId).order("created_at", { ascending: false });
-    setMyDeposits(data || []);
-  }
-
-  async function submitDeposit() {
-    const amount = Number(depositAmount);
-    if (!amount || amount <= 0) return alert("Enter a valid amount");
-    const { error } = await supabase.from("deposit_requests").insert({ user_id: userId, amount, reference_code: referenceCode() });
-    if (error) return alert(error.message);
-    setDepositAmount("");
-    alert("Request submitted — it'll be credited manually once your payment is confirmed, not instantly.");
-    loadMyDeposits();
-  }
-
-  async function loadMyWithdrawals() {
-    const { data } = await supabase.from("withdrawal_requests").select("*").eq("user_id", userId).order("created_at", { ascending: false });
-    setMyWithdrawals(data || []);
-  }
-
-  async function submitWithdrawal() {
-    const amount = Number(withdrawAmount);
-    if (!amount || amount < MIN_WITHDRAWAL) return alert(`Minimum withdrawal is ₦${MIN_WITHDRAWAL}`);
-    if (amount > balance) return alert("You don't have enough balance for that.");
-    if (!withdrawAccount.trim() || !withdrawBank.trim()) return alert("Enter your account number and bank name");
-    const { error } = await supabase.from("withdrawal_requests").insert({
-      user_id: userId, amount, account_number: withdrawAccount.trim(), bank_name: withdrawBank.trim(),
-    });
-    if (error) return alert(error.message);
-    setWithdrawAmount(""); setWithdrawAccount(""); setWithdrawBank("");
-    alert("Request submitted — you'll receive it manually once processed, not instantly.");
-    loadMyWithdrawals();
-  }
-
   return (
     <div style={{ background: DARK, minHeight: "100vh", color: "#fff", fontFamily: "Inter, sans-serif", paddingBottom: "4rem" }}>
       <div style={{ padding: "1.5rem 1.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -403,9 +409,10 @@ function App() {
 
             {visibleMarkets.map((m) => {
               if (m.market_type === "multi_candidate") {
-                const sorted = [...m.candidates].sort((a, b) => {
-                  const totalA = a.options.reduce((s, o) => s + Number(o.total_staked), 0);
-                  const totalB = b.options.reduce((s, o) => s + Number(o.total_staked), 0);
+                const candidates = m.candidates || [];
+                const sorted = [...candidates].sort((a, b) => {
+                  const totalA = (a.options || []).reduce((s, o) => s + Number(o.total_staked || 0), 0);
+                  const totalB = (b.options || []).reduce((s, o) => s + Number(o.total_staked || 0), 0);
                   return totalB - totalA;
                 });
                 const top2 = sorted.slice(0, 2);
@@ -413,13 +420,14 @@ function App() {
                   <div key={m.id} style={{ background: CARD, borderRadius: "16px", padding: "1rem", marginBottom: "0.85rem", border: `1px solid ${BORDER}` }}>
                     <div onClick={() => openDetail(m)}>
                       <p style={{ fontWeight: 600, fontSize: "0.98rem", margin: "0 0 0.2rem", lineHeight: 1.35 }}>{m.title}</p>
-                      <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                        {m.category} · {m.candidates.length} contenders
+                      <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.4rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                        {m.category} · {candidates.length} contenders
                       </p>
                       <p style={{ color: "#8A9099", fontSize: "0.75rem", margin: "0 0 0.6rem" }}>⏱ {timeLeft(m.close_time)}</p>
                     </div>
                     {top2.map((cand) => {
                       const { yes, no } = candidateOptions(cand);
+                      if (!yes || !no) return null; // skip candidates with broken/missing options instead of crashing
                       const pct = pctFor(yes, no);
                       return (
                         <div key={cand.id} style={{ marginBottom: "0.6rem" }}>
@@ -438,7 +446,7 @@ function App() {
                       );
                     })}
                     <button onClick={() => openDetail(m)} style={{ background: "none", border: "none", color: GREEN, fontSize: "0.8rem", padding: 0, marginTop: "0.3rem" }}>
-                      View all {m.candidates.length} contenders →
+                      View all {candidates.length} contenders →
                     </button>
                   </div>
                 );
@@ -447,12 +455,13 @@ function App() {
               const opts = directOptions(m);
               const yes = opts.find((o) => o.label === "Yes");
               const no = opts.find((o) => o.label === "No");
+              if (!yes || !no) return null; // skip malformed binary markets instead of crashing
               const pct = pctFor(yes, no);
               return (
                 <div key={m.id} style={{ background: CARD, borderRadius: "16px", padding: "1rem", marginBottom: "0.85rem", border: `1px solid ${BORDER}` }}>
                   <div onClick={() => openDetail(m)}>
                     <p style={{ fontWeight: 600, fontSize: "0.98rem", margin: "0 0 0.2rem", lineHeight: 1.35 }}>{m.title}</p>
-                    <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>{m.category}</p>
+                    <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.4rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>{m.category}</p>
                     <p style={{ color: "#8A9099", fontSize: "0.75rem", margin: "0 0 0.6rem" }}>⏱ {timeLeft(m.close_time)}</p>
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -535,7 +544,7 @@ function App() {
             <div>
               <div style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "1rem", marginBottom: "1rem" }}>
                 <p style={{ margin: "0 0 0.4rem", fontSize: "0.85rem", color: "#D6D9DE" }}>
-                  Send to: <strong>United Bank of Africa(UBA)</strong> · <strong>2350907121</strong>
+                  Send to: <strong>[Your bank name]</strong> · <strong>[Your account number]</strong>
                 </p>
                 <p style={{ margin: 0, fontSize: "0.85rem", color: GREEN }}>
                   Include this code in your transfer note: <strong>{referenceCode()}</strong>
@@ -655,7 +664,7 @@ function App() {
               <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>{m.title}</p>
               {m.market_type === "binary" ? (
                 <div style={{ display: "flex", gap: "0.5rem" }}>
-                  {m.options.filter(o => !o.candidate_id).map((o) => (
+                  {(m.options || []).filter(o => !o.candidate_id).map((o) => (
                     <button key={o.id} onClick={() => resolveBinaryAdmin(m.id, o.id)}
                       style={{ flex: 1, padding: "0.5rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "transparent", color: "#D6D9DE" }}>
                       {o.label} wins
@@ -663,7 +672,7 @@ function App() {
                   ))}
                 </div>
               ) : (
-                m.candidates.map((c) => (
+                (m.candidates || []).map((c) => (
                   <button key={c.id} onClick={() => resolveMultiCandidateAdmin(m.id, c.id)}
                     style={{ display: "block", width: "100%", padding: "0.5rem", marginBottom: "0.3rem", borderRadius: "8px", border: "1px solid #3A3F47", background: "transparent", color: "#D6D9DE", textAlign: "left" }}>
                     {c.name} wins
@@ -675,7 +684,7 @@ function App() {
 
           {adminTab === "deposits" && depositRequests.map((r) => (
             <div key={r.id} style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "0.9rem", marginBottom: "0.7rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div><p style={{ margin: 0, fontWeight: 600 }}>{r.users.first_name}</p><p style={{ margin: 0, color: MUTED, fontSize: "0.8rem" }}>Ref: {r.reference_code} · ₦{r.amount}</p></div>
+              <div><p style={{ margin: 0, fontWeight: 600 }}>{r.users?.first_name}</p><p style={{ margin: 0, color: MUTED, fontSize: "0.8rem" }}>Ref: {r.reference_code} · ₦{r.amount}</p></div>
               <button onClick={() => creditDeposit(r)} style={{ padding: "0.5rem 0.8rem", borderRadius: "8px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>Credit</button>
             </div>
           ))}
@@ -683,7 +692,7 @@ function App() {
 
           {adminTab === "withdrawals" && withdrawalRequests.map((r) => (
             <div key={r.id} style={{ background: CARD, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "0.9rem", marginBottom: "0.7rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div><p style={{ margin: 0, fontWeight: 600 }}>{r.users.first_name}</p><p style={{ margin: 0, color: MUTED, fontSize: "0.8rem" }}>{r.bank_name} · {r.account_number} · ₦{r.amount}</p></div>
+              <div><p style={{ margin: 0, fontWeight: 600 }}>{r.users?.first_name}</p><p style={{ margin: 0, color: MUTED, fontSize: "0.8rem" }}>{r.bank_name} · {r.account_number} · ₦{r.amount}</p></div>
               <button onClick={() => markWithdrawalPaid(r)} style={{ padding: "0.5rem 0.8rem", borderRadius: "8px", border: "none", background: GREEN, color: DARK, fontWeight: 700 }}>Mark Paid</button>
             </div>
           ))}
@@ -696,12 +705,13 @@ function App() {
           <div style={{ padding: "1.25rem" }}>
             <button onClick={() => setDetailMarket(null)} style={{ background: "none", border: "none", color: "#8A9099", fontSize: "1.3rem", marginBottom: "0.75rem" }}>✕</button>
             <h2 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.3rem", margin: "0 0 0.3rem" }}>{detailMarket.title}</h2>
-            <p style={{ color: MUTED, fontSize: "0.8rem", textTransform: "uppercase", margin: "0 0 1rem" }}>{detailMarket.category}</p>
-            <p style={{ color: "#8A9099", fontSize: "0.75rem", margin: "0 0 0.6rem" }}>⏱ {timeLeft(m.close_time)}</p>
+            <p style={{ color: MUTED, fontSize: "0.8rem", textTransform: "uppercase", margin: "0 0 0.4rem" }}>{detailMarket.category}</p>
+            <p style={{ color: "#8A9099", fontSize: "0.8rem", margin: "0 0 1rem" }}>⏱ {timeLeft(detailMarket.close_time)}</p>
 
             {detailMarket.market_type === "multi_candidate" ? (
-              detailMarket.candidates.map((cand) => {
+              (detailMarket.candidates || []).map((cand) => {
                 const { yes, no } = candidateOptions(cand);
+                if (!yes || !no) return null;
                 const pct = pctFor(yes, no);
                 return (
                   <div key={cand.id} style={{ marginBottom: "0.75rem" }}>
@@ -724,6 +734,7 @@ function App() {
                 const opts = directOptions(detailMarket);
                 const yes = opts.find((o) => o.label === "Yes");
                 const no = opts.find((o) => o.label === "No");
+                if (!yes || !no) return <p style={{ color: MUTED }}>This market's options are missing.</p>;
                 const pct = pctFor(yes, no);
                 return (
                   <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
@@ -836,13 +847,13 @@ function App() {
       )}
 
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: CARD, borderTop: `1px solid ${BORDER}`, display: "flex", padding: "0.6rem 0", zIndex: 10 }}>
-        <button onClick={() => setView("markets")} style={{ flex: 1, background: "none", border: "none", color: view === "markets" ? GREEN : "#8A9099", fontWeight: 600 }}>Markets</button>
-        <button onClick={() => { setView("leaderboard"); loadLeaderboard(); }} style={{ flex: 1, background: "none", border: "none", color: view === "leaderboard" ? GREEN : "#8A9099", fontWeight: 600 }}>Leaderboard</button>
-        <button onClick={() => { setView("wallet"); loadMyDeposits(); loadMyWithdrawals(); }} style={{ flex: 1, background: "none", border: "none", color: view === "wallet" ? GREEN : "#8A9099", fontWeight: 600 }}>Wallet</button>
-        <button onClick={() => { setView("profile"); loadProfile(); }} style={{ flex: 1, background: "none", border: "none", color: view === "profile" ? GREEN : "#8A9099", fontWeight: 600 }}>Profile</button>
+        <button onClick={() => setView("markets")} style={{ flex: 1, background: "none", border: "none", color: view === "markets" ? GREEN : "#8A9099", fontWeight: 600, fontSize: "0.8rem" }}>Markets</button>
+        <button onClick={() => { setView("leaderboard"); loadLeaderboard(); }} style={{ flex: 1, background: "none", border: "none", color: view === "leaderboard" ? GREEN : "#8A9099", fontWeight: 600, fontSize: "0.8rem" }}>Leaderboard</button>
+        <button onClick={() => { setView("wallet"); loadMyDeposits(); loadMyWithdrawals(); }} style={{ flex: 1, background: "none", border: "none", color: view === "wallet" ? GREEN : "#8A9099", fontWeight: 600, fontSize: "0.8rem" }}>Wallet</button>
+        <button onClick={() => { setView("profile"); loadProfile(); }} style={{ flex: 1, background: "none", border: "none", color: view === "profile" ? GREEN : "#8A9099", fontWeight: 600, fontSize: "0.8rem" }}>Profile</button>
         {isAdmin && (
           <button onClick={() => { setView("admin"); loadAdminMarkets(); loadDepositRequests(); loadWithdrawalRequests(); }}
-            style={{ flex: 1, background: "none", border: "none", color: view === "admin" ? GREEN : "#8A9099", fontWeight: 600 }}>
+            style={{ flex: 1, background: "none", border: "none", color: view === "admin" ? GREEN : "#8A9099", fontWeight: 600, fontSize: "0.8rem" }}>
             Admin
           </button>
         )}
