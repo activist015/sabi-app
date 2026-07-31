@@ -218,6 +218,15 @@ function App() {
     return { yes, no };
   }
 
+  function timeLeft(closeTime) {
+    const diff = new Date(closeTime) - new Date();
+    if (diff <= 0) return "Closed";
+    const hours = Math.floor(diff / 3600000);
+    if (hours < 1) return `${Math.floor(diff / 60000)}m left`;
+    if (hours < 24) return `${hours}h left`;
+    return `${Math.floor(hours / 24)}d left`;
+  }
+
   async function createMarket() {
     const { title, category, closeTime, rules, context } = newMarketForm;
     if (!title || !closeTime) return alert("Title and close time are required");
@@ -407,6 +416,7 @@ function App() {
                       <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
                         {m.category} · {m.candidates.length} contenders
                       </p>
+                      <p style={{ color: "#8A9099", fontSize: "0.75rem", margin: "0 0 0.6rem" }}>⏱ {timeLeft(m.close_time)}</p>
                     </div>
                     {top2.map((cand) => {
                       const { yes, no } = candidateOptions(cand);
@@ -443,6 +453,7 @@ function App() {
                   <div onClick={() => openDetail(m)}>
                     <p style={{ fontWeight: 600, fontSize: "0.98rem", margin: "0 0 0.2rem", lineHeight: 1.35 }}>{m.title}</p>
                     <p style={{ color: MUTED, fontSize: "0.8rem", margin: "0 0 0.85rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>{m.category}</p>
+                    <p style={{ color: "#8A9099", fontSize: "0.75rem", margin: "0 0 0.6rem" }}>⏱ {timeLeft(m.close_time)}</p>
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem" }}>
                     <button onClick={(e) => { e.stopPropagation(); openBetSheet(yes.id, m.id, "Yes", opts); }}
@@ -686,6 +697,7 @@ function App() {
             <button onClick={() => setDetailMarket(null)} style={{ background: "none", border: "none", color: "#8A9099", fontSize: "1.3rem", marginBottom: "0.75rem" }}>✕</button>
             <h2 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: "1.3rem", margin: "0 0 0.3rem" }}>{detailMarket.title}</h2>
             <p style={{ color: MUTED, fontSize: "0.8rem", textTransform: "uppercase", margin: "0 0 1rem" }}>{detailMarket.category}</p>
+            <p style={{ color: "#8A9099", fontSize: "0.75rem", margin: "0 0 0.6rem" }}>⏱ {timeLeft(m.close_time)}</p>
 
             {detailMarket.market_type === "multi_candidate" ? (
               detailMarket.candidates.map((cand) => {
